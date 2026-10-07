@@ -27,17 +27,26 @@ RESOLUTIONS = {
 }
 
 BG_COLOR = (13, 13, 13)
-HEADER_COLOR = (255, 122, 0)
 TEXT_COLOR = (255, 255, 255)
 MUTED_COLOR = (150, 150, 150)
-DIVIDER_COLOR = (70, 70, 70)
+DIVIDER_COLOR = (55, 55, 55)
+
+# Реклама
+AD_BG_COLOR = (255, 122, 0)           # оранжевая плашка
+AD_TEXT_COLOR = (13, 13, 13)          # тёмный текст
+AD_ACCENT_COLOR = (255, 255, 255)     # белый для второй строки
+BOT_USERNAME = "@твой_бот_username"   # ← ЗАМЕНИ на username своего бота
 
 MAX_COLUMNS = 4
-MAX_CHARS_PER_COLUMN = 15000     # Подняли с 7000
-MAX_TOTAL_CHARS = 40000          # Общий лимит на все столбцы
+MAX_CHARS_PER_COLUMN = 15000
+MAX_TOTAL_CHARS = 40000
 
-MIN_FONT_FLOOR = 8               # Абсолютный минимум шрифта (px)
-ABS_MIN_FONT = 6                 # Ниже не опускаемся даже при переполнении
+MIN_FONT_FLOOR = 8
+ABS_MIN_FONT = 6
+
+# Отступы
+EDGE_MARGIN = 10          # минимальный отступ от края
+BOTTOM_RESERVE = 90       # место под рекламную плашку
 
 
 # ========== ХЕЛПЕРЫ ==========
@@ -64,10 +73,71 @@ def calc_column_height(items: list[str], max_chars: int, line_h: int, item_gap: 
     return total
 
 
+def draw_ad_block(draw, W, H, source_text: str, scale: float):
+    """Рисует рекламную плашку в правом нижнем углу."""
+    # Размеры плашки — подбираем под содержимое
+    pad_x = int(18 * scale)
+    pad_y = int(12 * scale)
+
+    try:
+        font_line1 = ImageFont.truetype(FONT_PATH, int(20 * scale))
+        font_line2 = ImageFont.truetype(FONT_PATH, int(16 * scale))
+    except Exception:
+        font_line1 = ImageFont.load_default()
+        font_line2 = ImageFont.load_default()
+
+    line1 = "AMAZING HUD BOT"
+    line2 = f"Источник: {source_text}" if source_text else "Подсказка создана в боте"
+
+    # Считаем ширину
+    b1 = draw.textbbox((0, 0), line1, font=font_line1)
+    b2 = draw.textbbox((0, 0), line2, font=font_line2)
+    text_w = max(b1[2] - b1[0], b2[2] - b2[0])
+
+    box_w = text_w + pad_x * 2
+    box_h = int(22 * scale) + int(18 * scale) + pad_y * 2
+
+    # Правый нижний угол
+    box_x2 = W - EDGE_MARGIN
+    box_x1 = box_x2 - box_w
+    box_y2 = H - EDGE_MARGIN
+    box_y1 = box_y2 - box_h
+
+    # Тень
+    shadow_offset = int(3 * scale)
+    draw.rounded_rectangle(
+        [(box_x1 + shadow_offset, box_y1 + shadow_offset),
+         (box_x2 + shadow_offset, box_y2 + shadow_offset)],
+        radius=int(8 * scale),
+        fill=(0, 0, 0),
+    )
+
+    # Оранжевая плашка
+    draw.rounded_rectangle(
+        [(box_x1, box_y1), (box_x2, box_y2)],
+        radius=int(8 * scale),
+        fill=AD_BG_COLOR,
+    )
+
+    # Текст: строка 1 — жирная (крупнее), строка 2 — мелкая
+    draw.text(
+        (box_x1 + pad_x, box_y1 + pad_y - int(2 * scale)),
+        line1,
+        font=font_line1,
+        fill=AD_TEXT_COLOR,
+    )
+    draw.text(
+        (box_x1 + pad_x, box_y1 + pad_y + int(22 * scale)),
+        line2,
+        font=font_line2,
+        fill=AD_TEXT_COLOR,
+    )
+
+
 def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"):
     """
-    Возвращает (bytes, actual_rendered_items).
-    Если текст не влез даже при минимальном шрифте — сообщает об этом.
+    Рисует карточку без шапки и подписи.
+    Плашка с рекламой — в правом нижнем углу.
     """
     active_columns = [c for c in columns if c]
     num_cols = len(active_columns)
@@ -77,38 +147,26 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
 
     res = RESOLUTIONS.get(resolution_key, RESOLUTIONS["hd"])
     W, H = res["w"], res["h"]
-
     scale = W / 1920
-    margin = int(50 * scale)
-    header_h = int(130 * scale)
-    gap_between_cols = int(36 * scale)
 
-    title_size = int(66 * scale)
-    small_size = int(28 * scale)
+    margin = EDGE_MARGIN
+    gap_between_cols = int(30 * scale)
 
-    body_top = margin + header_h + int(50 * scale)
-    body_bottom = H - int(110 * scale)
+    body_top = margin
+    body_bottom = H - margin - int(BOTTOM_RESERVE * scale)
     available_h = body_bottom - body_top
 
     img = Image.new("RGB", (W, H), BG_COLOR)
     draw = ImageDraw.Draw(img)
 
-    try:
-        font_title = ImageFont.truetype(FONT_PATH, title_size)
-        font_small = ImageFont.truetype(FONT_PATH, small_size)
-    except Exception as e:
-        print(f"⚠️ Шрифт не загрузился: {e}")
-        font_title = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-
     col_width = (W - 2 * margin - (num_cols - 1) * gap_between_cols) // num_cols
 
-    # ----- ПОДБОР РАЗМЕРА ШРИФТА (до абс. минимума) -----
+    # ----- ПОДБОР РАЗМЕРА ШРИФТА -----
     min_font = max(ABS_MIN_FONT, int(MIN_FONT_FLOOR * scale))
     max_font = int(44 * scale)
 
     chosen = None
-    for size in range(max_font, min_font - 1, -1):  # шаг 1 для точности
+    for size in range(max_font, min_font - 1, -1):
         try:
             font_body = ImageFont.truetype(FONT_PATH, size)
         except Exception:
@@ -136,7 +194,6 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
 
     overflow = False
     if not chosen:
-        # Даже минимум не влез — используем минимум и режем с предупреждением
         overflow = True
         font_body = ImageFont.truetype(FONT_PATH, min_font)
         chosen = {
@@ -147,20 +204,6 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
             "item_gap": int(min_font * 0.28),
         }
 
-    # ----- ШАПКА -----
-    draw.rounded_rectangle(
-        [(margin, margin), (W - margin, margin + header_h)],
-        radius=int(18 * scale),
-        fill=HEADER_COLOR,
-    )
-    title_text = title.upper()
-    bbox = draw.textbbox((0, 0), title_text, font=font_title)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    title_x = margin + (W - 2 * margin - text_w) // 2
-    title_y = margin + (header_h - text_h) // 2 - int(6 * scale)
-    draw.text((title_x, title_y), title_text, font=font_title, fill=BG_COLOR)
-
     # ----- КОЛОНКИ -----
     rendered_count = 0
     for col_idx, col_items in enumerate(active_columns):
@@ -169,11 +212,10 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
 
         for item in col_items:
             lines = wrap_text(item, chosen["max_chars"])
-            # Проверяем, влезет ли весь пункт целиком
             item_height = len(lines) * chosen["line_h"]
             if y + item_height > body_bottom:
                 overflow = True
-                break  # дальше не рисуем в этой колонке
+                break
 
             for i, line in enumerate(lines):
                 prefix = "• " if i == 0 else "   "
@@ -190,28 +232,19 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
         if col_idx < num_cols - 1:
             line_x = col_x + col_width + gap_between_cols // 2
             draw.line(
-                [(line_x, body_top), (line_x, body_bottom - int(20 * scale))],
+                [(line_x, body_top), (line_x, body_bottom)],
                 fill=DIVIDER_COLOR,
                 width=max(1, int(2 * scale)),
             )
 
-    # ----- ПОДПИСЬ -----
-    total_items = sum(len(c) for c in active_columns)
-    info = f"AMAZING HUD · {num_cols} столбц. · {rendered_count}/{total_items} п. · {chosen['size']}px"
-    if overflow:
-        info += " ⚠️"
-    draw.text(
-        (margin, H - int(65 * scale)),
-        info,
-        font=font_small,
-        fill=MUTED_COLOR,
-    )
+    # ----- РЕКЛАМНАЯ ПЛАШКА -----
+    draw_ad_block(draw, W, H, source_text=title, scale=scale)
 
     buf = BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
 
-    return buf.read(), rendered_count, total_items, overflow
+    return buf.read(), rendered_count, sum(len(c) for c in active_columns), overflow
 
 
 # ========== БОТ ==========
@@ -257,12 +290,13 @@ async def cmd_start(message: types.Message):
         "👋 Привет! Я генерирую подсказки в стиле AMAZING HUD.\n\n"
         "📖 *Как использовать:*\n"
         "1. Отправь /make\n"
-        "2. Введи заголовок\n"
-        "3. Выбери столбец кнопкой (1–4) — и вставь текст\n"
+        "2. Введи *источник* — например «УК РФ» или «КоАП»\n"
+        "   (он попадёт в плашку в углу картинки)\n"
+        "3. Выбери столбец кнопкой (1–4) и вставь текст\n"
         "4. Переключайся между столбцами, заполняй их\n"
         "5. Нажми «✅ Готово»\n"
         "6. Выбери разрешение\n\n"
-        f"📊 Лимит: {MAX_CHARS_PER_COLUMN} символов на столбец, {MAX_TOTAL_CHARS} всего.",
+        f"📊 Лимит: {MAX_CHARS_PER_COLUMN} символов на столбец.",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -272,8 +306,9 @@ async def cmd_start(message: types.Message):
 async def cmd_make(message: types.Message):
     user_data[message.from_user.id] = make_state()
     await message.answer(
-        "📝 Введи *заголовок* (одной строкой):\n"
-        "Например: `Основания для задержания`",
+        "📝 Введи *источник* подсказки (одной строкой):\n"
+        "Например: `УК РФ`, `КоАП`, `ФЗ о полиции`\n\n"
+        "Он будет отображён в правом нижнем углу картинки.",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -370,12 +405,11 @@ async def on_resolution(callback: types.CallbackQuery):
         )
         photo = BufferedInputFile(img_bytes, filename="hud.png")
 
-        caption = f"✅ {state['title']} · {rendered}/{total} строк · {RESOLUTIONS[res_key]['label']}"
+        caption = f"✅ Источник: {state['title']} · {rendered}/{total} строк · {RESOLUTIONS[res_key]['label']}"
         if overflow:
             caption += (
-                f"\n⚠️ Не всё влезло на картинку ({total - rendered} строк обрезано). "
-                f"Уменьши текст, раздели на несколько подсказок "
-                f"или выбери разрешение побольше (4K)."
+                f"\n⚠️ Не всё влезло ({total - rendered} строк обрезано). "
+                f"Выбери разрешение побольше (4K)."
             )
 
         await callback.message.answer_photo(photo, caption=caption)
@@ -400,11 +434,11 @@ async def handle_text(message: types.Message):
         return
 
     if state.get("step") == "awaiting_title":
-        state["title"] = text[:80]
+        state["title"] = text[:60]
         state["step"] = "awaiting_text"
         state["active_col"] = 0
         await message.answer(
-            f"✅ Заголовок: *{state['title']}*\n\n"
+            f"✅ Источник: *{state['title']}*\n\n"
             f"Теперь выбери столбец кнопкой ниже и вставь текст.\n"
             f"Активен *Столбец 1*.",
             parse_mode="Markdown",
@@ -418,23 +452,17 @@ async def handle_text(message: types.Message):
 
         if current_len + len(text) > MAX_CHARS_PER_COLUMN:
             await message.answer(
-                f"⚠️ Столбец {col + 1} переполнен.\n"
-                f"Сейчас: {current_len}, добавляешь: {len(text)}, "
-                f"лимит: {MAX_CHARS_PER_COLUMN}.\n\n"
-                f"Сократи текст, выбери другой столбец "
-                f"или нажми «✅ Готово»."
+                f"⚠️ Столбец {col + 1} переполнен. Сократи текст или нажми «✅ Готово»."
             )
             return
 
         total_before = sum(sum(len(l) for l in c) for c in state["columns"])
         if total_before + len(text) > MAX_TOTAL_CHARS:
             await message.answer(
-                f"⚠️ Общий лимит {MAX_TOTAL_CHARS} символов превышен. "
-                f"Нажми «✅ Готово» и генерируй."
+                f"⚠️ Общий лимит {MAX_TOTAL_CHARS} символов превышен. Нажми «✅ Готово»."
             )
             return
 
-        # Добавляем построчно
         added = 0
         for line in text.split("\n"):
             line = line.strip()
@@ -446,8 +474,6 @@ async def handle_text(message: types.Message):
         total_chars = sum(sum(len(l) for l in c) for c in state["columns"])
         await message.answer(
             f"➕ Добавлено *{added}* строк в Столбец {col + 1}.\n"
-            f"В столбце: {len(state['columns'][col])} строк, "
-            f"{sum(len(l) for l in state['columns'][col])} символов.\n"
             f"Всего по всем: {total_lines} строк, {total_chars} символов.",
             parse_mode="Markdown",
         )
