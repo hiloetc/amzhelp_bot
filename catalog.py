@@ -5,11 +5,13 @@ from typing import Optional
 DB_PATH = "builds.db"
 
 
+# ========== ИНИЦИАЛИЗАЦИЯ ВСЕХ ТАБЛИЦ ==========
 def init_db():
-    """Создаёт таблицы, если их нет."""
+    """Создаёт все таблицы, если их нет."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    # --- Сборки ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS builds (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +29,7 @@ def init_db():
         )
     """)
 
+    # --- Оценки сборок ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ratings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,14 +41,44 @@ def init_db():
         )
     """)
 
+    # --- Авторы ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS authors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            telegram TEXT,
+            description TEXT,
+            verified INTEGER DEFAULT 0,
+            trust_score REAL DEFAULT 0,
+            builds_count INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+    """)
+
+    # --- Компоненты для конструктора ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT,
+            link TEXT,
+            sha256 TEXT,
+            size_kb INTEGER,
+            author TEXT,
+            created_at TEXT,
+            UNIQUE(name, category)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
 
+# ========== СБОРКИ ==========
 def add_build(title: str, category: str, description: str = "",
               author: str = "", link: str = "", sha256: str = "",
               vt_status: str = "", added_by: int = 0) -> int:
-    """Добавляет сборку в каталог. Возвращает ID."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -60,7 +93,6 @@ def add_build(title: str, category: str, description: str = "",
 
 
 def get_builds(category: Optional[str] = None, limit: int = 10, offset: int = 0):
-    """Возвращает список сборок, опционально с фильтром по категории."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -84,7 +116,6 @@ def get_builds(category: Optional[str] = None, limit: int = 10, offset: int = 0)
 
 
 def get_build(build_id: int):
-    """Возвращает одну сборку по ID."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -95,7 +126,6 @@ def get_build(build_id: int):
 
 
 def rate_build(build_id: int, user_id: int, score: int):
-    """Ставит оценку (1–5). Если пользователь уже голосовал — обновляет."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -105,7 +135,6 @@ def rate_build(build_id: int, user_id: int, score: int):
         ON CONFLICT(build_id, user_id) DO UPDATE SET score = excluded.score
     """, (build_id, user_id, score, datetime.now().isoformat()))
 
-    # Пересчёт рейтинга
     cursor.execute("""
         UPDATE builds
         SET rating = (SELECT AVG(score) FROM ratings WHERE build_id = ?),
@@ -118,7 +147,6 @@ def rate_build(build_id: int, user_id: int, score: int):
 
 
 def delete_build(build_id: int):
-    """Удаляет сборку (для админов)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM builds WHERE id = ?", (build_id,))
@@ -138,30 +166,9 @@ def count_builds(category: Optional[str] = None) -> int:
     conn.close()
     return count
 
-    # Добавь эту функцию в catalog.py
 
-def init_authors_table():
-    """Создаёт таблицу авторов сборок."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS authors (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            telegram TEXT,
-            description TEXT,
-            verified INTEGER DEFAULT 0,
-            trust_score REAL DEFAULT 0,
-            builds_count INTEGER DEFAULT 0,
-            created_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-
+# ========== АВТОРЫ ==========
 def add_author(name: str, telegram: str = "", description: str = "", verified: int = 0) -> int:
-    """Добавляет автора. Если существует — обновляет."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -235,34 +242,22 @@ def update_author_stats(author_name: str):
     conn.close()
 
 
-# ========== КОНСТРУКТОР СБОРОК ==========
-
-def init_components_table():
-    """Создаёт таблицу компонентов для конструктора."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS components (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            category TEXT NOT NULL,
-            description TEXT,
-            link TEXT,
-            sha256 TEXT,
-            size_kb INTEGER,
-            author TEXT,
-            created_at TEXT,
-            UNIQUE(name, category)
-        )
-    """)
-    conn.commit()
-    conn.close()
+# ========== КОМПОНЕНТЫ (ДЛЯ КОНСТРУКТОРА) ==========
+COMPONENT_CATEGORIES = {
+    "fps_boost": "🚀 FPS-буст",
+    "textures": "🖼 Сжатые текстуры",
+    "lights": "🚨 Мигалки / спецсигналы",
+    "masks": "🎭 Маски / скины",
+    "weapons": "🔫 Оружие / звуки",
+    "ui": "🎨 Интерфейс / HUD",
+    "sounds": "🔊 Звуки / музыка",
+    "other": "📦 Другое",
+}
 
 
 def add_component(name: str, category: str, description: str = "",
                   link: str = "", sha256: str = "", size_kb: int = 0,
                   author: str = "") -> int:
-    """Добавляет компонент в конструктор."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -276,14 +271,14 @@ def add_component(name: str, category: str, description: str = "",
             author = excluded.author
     """, (name, category, description, link, sha256, size_kb, author, datetime.now().isoformat()))
     conn.commit()
+
     cursor.execute("SELECT id FROM components WHERE name = ? AND category = ?", (name, category))
     comp_id = cursor.fetchone()[0]
     conn.close()
     return comp_id
 
 
-def get_components(category: str = None, limit: int = 50):
-    """Список компонентов по категории или все."""
+def get_components(category: Optional[str] = None, limit: int = 50):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -319,16 +314,3 @@ def delete_component(comp_id: int):
     cursor.execute("DELETE FROM components WHERE id = ?", (comp_id,))
     conn.commit()
     conn.close()
-
-
-# Категории компонентов для конструктора
-COMPONENT_CATEGORIES = {
-    "fps_boost": "🚀 FPS-буст",
-    "textures": "🖼 Сжатые текстуры",
-    "lights": "🚨 Мигалки / спецсигналы",
-    "masks": "🎭 Маски / скины",
-    "weapons": "🔫 Оружие / звуки",
-    "ui": "🎨 Интерфейс / HUD",
-    "sounds": "🔊 Звуки / музыка",
-    "other": "📦 Другое",
-}
