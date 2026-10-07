@@ -137,3 +137,198 @@ def count_builds(category: Optional[str] = None) -> int:
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+    # Добавь эту функцию в catalog.py
+
+def init_authors_table():
+    """Создаёт таблицу авторов сборок."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS authors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            telegram TEXT,
+            description TEXT,
+            verified INTEGER DEFAULT 0,
+            trust_score REAL DEFAULT 0,
+            builds_count INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def add_author(name: str, telegram: str = "", description: str = "", verified: int = 0) -> int:
+    """Добавляет автора. Если существует — обновляет."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO authors (name, telegram, description, verified, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            telegram = excluded.telegram,
+            description = excluded.description,
+            verified = excluded.verified
+    """, (name, telegram, description, verified, datetime.now().isoformat()))
+    conn.commit()
+
+    cursor.execute("SELECT id FROM authors WHERE name = ?", (name,))
+    author_id = cursor.fetchone()[0]
+    conn.close()
+    return author_id
+
+
+def get_author(author_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM authors WHERE id = ?", (author_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_author_by_name(name: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM authors WHERE name = ?", (name,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_all_authors(limit: int = 20, offset: int = 0):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM authors
+        ORDER BY verified DESC, trust_score DESC, builds_count DESC
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_author_stats(author_name: str):
+    """Пересчитывает количество сборок и средний рейтинг автора."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE authors
+        SET builds_count = (
+                SELECT COUNT(*) FROM builds WHERE author = ?
+            ),
+            trust_score = COALESCE((
+                SELECT AVG(rating) FROM builds
+                WHERE author = ? AND votes > 0
+            ), 0)
+        WHERE name = ?
+    """, (author_name, author_name, author_name))
+
+    conn.commit()
+    conn.close()
+
+
+# ========== КОНСТРУКТОР СБОРОК ==========
+
+def init_components_table():
+    """Создаёт таблицу компонентов для конструктора."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS components (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT,
+            link TEXT,
+            sha256 TEXT,
+            size_kb INTEGER,
+            author TEXT,
+            created_at TEXT,
+            UNIQUE(name, category)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def add_component(name: str, category: str, description: str = "",
+                  link: str = "", sha256: str = "", size_kb: int = 0,
+                  author: str = "") -> int:
+    """Добавляет компонент в конструктор."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO components (name, category, description, link, sha256, size_kb, author, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(name, category) DO UPDATE SET
+            description = excluded.description,
+            link = excluded.link,
+            sha256 = excluded.sha256,
+            size_kb = excluded.size_kb,
+            author = excluded.author
+    """, (name, category, description, link, sha256, size_kb, author, datetime.now().isoformat()))
+    conn.commit()
+    cursor.execute("SELECT id FROM components WHERE name = ? AND category = ?", (name, category))
+    comp_id = cursor.fetchone()[0]
+    conn.close()
+    return comp_id
+
+
+def get_components(category: str = None, limit: int = 50):
+    """Список компонентов по категории или все."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    if category:
+        cursor.execute("""
+            SELECT * FROM components WHERE category = ?
+            ORDER BY name LIMIT ?
+        """, (category, limit))
+    else:
+        cursor.execute("""
+            SELECT * FROM components ORDER BY category, name LIMIT ?
+        """, (limit,))
+
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_component(comp_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM components WHERE id = ?", (comp_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_component(comp_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM components WHERE id = ?", (comp_id,))
+    conn.commit()
+    conn.close()
+
+
+# Категории компонентов для конструктора
+COMPONENT_CATEGORIES = {
+    "fps_boost": "🚀 FPS-буст",
+    "textures": "🖼 Сжатые текстуры",
+    "lights": "🚨 Мигалки / спецсигналы",
+    "masks": "🎭 Маски / скины",
+    "weapons": "🔫 Оружие / звуки",
+    "ui": "🎨 Интерфейс / HUD",
+    "sounds": "🔊 Звуки / музыка",
+    "other": "📦 Другое",
+}
