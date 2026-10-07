@@ -36,7 +36,7 @@ CATEGORIES = {
 }
 
 
-# ========== VIRUSTOTAL (без изменений) ==========
+# ========== VIRUSTOTAL ==========
 VT_API_URL = "https://www.virustotal.com/api/v3/files/{}"
 
 
@@ -207,7 +207,7 @@ def components_keyboard(category: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# ========== ХЕНДЛЕРЫ КОМАНД ==========
+# ========== ХЕНДЛЕРЫ КОМАНД (все команды идут ПЕРВЫМИ) ==========
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -216,7 +216,6 @@ async def cmd_start(message: types.Message):
         "📦 /builds — каталог сборок\n"
         "👤 /authors — рейтинг авторов\n"
         "🛠 /constructor — собрать свою сборку\n"
-        "➕ /addbuild — добавить сборку (админ)\n"
         "❓ /help — помощь",
         parse_mode="Markdown",
     )
@@ -229,10 +228,11 @@ async def cmd_help(message: types.Message):
         "/scan — проверка файла через VirusTotal\n"
         "/builds — каталог сборок\n"
         "/authors — авторы и их рейтинг\n"
-        "/constructor — конструктор своей сборки\n"
-        "/addbuild — добавить сборку (админ)\n"
-        "/addauthor — добавить автора (админ)\n"
-        "/addcomponent — добавить компонент (админ)",
+        "/constructor — конструктор своей сборки\n\n"
+        "**Админ-команды:**\n"
+        "/addbuild — добавить сборку\n"
+        "/addauthor — добавить автора\n"
+        "/addcomponent — добавить компонент",
         parse_mode="Markdown",
     )
 
@@ -441,27 +441,23 @@ async def on_author_builds(callback: CallbackQuery):
         await callback.answer("Автор не найден", show_alert=True)
         return
 
-    conn_builds = []
-    all_builds = catalog.get_builds(limit=100)
-    for b in all_builds:
-        if b.get("author") == author["name"]:
-            conn_builds.append(b)
+    all_builds = catalog.get_builds(limit=200)
+    author_builds = [b for b in all_builds if b.get("author") == author["name"]]
 
-    if not conn_builds:
+    if not author_builds:
         await callback.answer("У автора нет сборок", show_alert=True)
         return
 
     await callback.message.edit_text(
         f"📦 Сборки автора **{author['name']}**:",
         parse_mode="Markdown",
-        reply_markup=build_list_keyboard(conn_builds),
+        reply_markup=build_list_keyboard(author_builds),
     )
     await callback.answer()
 
 
 # ========== CALLBACK: КОНСТРУКТОР ==========
-# Хранилище выбранных компонентов в памяти
-user_cart = {}  # user_id -> set(component_ids)
+user_cart = {}
 
 
 @dp.callback_query(F.data.startswith("ccat:"))
@@ -497,7 +493,7 @@ async def on_cadd(callback: CallbackQuery):
     user_cart[uid].add(comp_id)
 
     comp = catalog.get_component(comp_id)
-    await callback.answer(f"✅ Добавлено: {comp['name']}")
+    await callback.answer(f"✅ Добавлено: {comp['name'] if comp else '?'}")
 
 
 @dp.callback_query(F.data == "cclear")
@@ -518,7 +514,6 @@ async def on_cbuild(callback: CallbackQuery):
         await callback.answer("Сначала добавь компоненты", show_alert=True)
         return
 
-    # Собираем данные по выбранным компонентам
     components = []
     for cid in cart:
         c = catalog.get_component(cid)
@@ -529,7 +524,6 @@ async def on_cbuild(callback: CallbackQuery):
         await callback.answer("Компоненты не найдены", show_alert=True)
         return
 
-    # Группируем по категориям
     by_cat = {}
     for c in components:
         by_cat.setdefault(c["category"], []).append(c)
@@ -542,8 +536,6 @@ async def on_cbuild(callback: CallbackQuery):
             if c.get("size_kb"):
                 text += f" ({c['size_kb']} KB)"
             text += "\n"
-            if c.get("description"):
-                text += f"  _{c['description'][:80]}_\n"
         text += "\n"
 
     text += "━━━━━━━━━━━━━━\n"
@@ -562,7 +554,7 @@ async def on_cbuild(callback: CallbackQuery):
     await callback.answer()
 
 
-# ========== ADDBUILD / ADDAUTHOR / ADDCOMPONENT ==========
+# ========== ОБРАБОТЧИКИ ДАННЫХ (title:, name:) ==========
 @dp.message(F.text.startswith("title:"))
 async def handle_addbuild_data(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -597,7 +589,6 @@ async def handle_addbuild_data(message: types.Message):
 
 @dp.message(F.text.startswith("name:"))
 async def handle_addauthor_or_component(message: types.Message):
-    """Обрабатывает и /addauthor, и /addcomponent — они оба начинаются с name:."""
     if message.from_user.id not in ADMIN_IDS:
         return
 
@@ -610,7 +601,6 @@ async def handle_addauthor_or_component(message: types.Message):
     if "name" not in data:
         return
 
-    # Если есть category — это компонент
     if "category" in data:
         if data["category"] not in catalog.COMPONENT_CATEGORIES:
             await message.answer(
@@ -629,7 +619,6 @@ async def handle_addauthor_or_component(message: types.Message):
         await message.answer(f"✅ Компонент добавлен! ID: {comp_id}\n\n/constructor")
         return
 
-    # Иначе — автор
     author_id = catalog.add_author(
         name=data["name"],
         telegram=data.get("telegram", ""),
@@ -639,7 +628,7 @@ async def handle_addauthor_or_component(message: types.Message):
     await message.answer(f"✅ Автор добавлен! ID: {author_id}\n\n/authors")
 
 
-# ========== SCAN: файл и хеш ==========
+# ========== SCAN: файл и хеш (в САМОМ НИЗУ) ==========
 @dp.message(F.document)
 async def handle_file(message: types.Message):
     doc = message.document
