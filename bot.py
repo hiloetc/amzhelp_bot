@@ -7,7 +7,7 @@ load_dotenv()
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from PIL import Image, ImageDraw, ImageFont
 
@@ -32,9 +32,12 @@ TEXT_COLOR = (255, 255, 255)
 MUTED_COLOR = (150, 150, 150)
 DIVIDER_COLOR = (70, 70, 70)
 
-MAX_COLUMNS = 4           # максимум столбцов
-MAX_CHARS_PER_COLUMN = 7000  # лимит на один столбец
-MAX_TOTAL_CHARS = 20000
+MAX_COLUMNS = 4
+MAX_CHARS_PER_COLUMN = 15000     # Подняли с 7000
+MAX_TOTAL_CHARS = 40000          # Общий лимит на все столбцы
+
+MIN_FONT_FLOOR = 8               # Абсолютный минимум шрифта (px)
+ABS_MIN_FONT = 6                 # Ниже не опускаемся даже при переполнении
 
 
 # ========== ХЕЛПЕРЫ ==========
@@ -61,12 +64,11 @@ def calc_column_height(items: list[str], max_chars: int, line_h: int, item_gap: 
     return total
 
 
-def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd") -> bytes:
+def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"):
     """
-    columns — список столбцов, каждый столбец это список строк (пунктов).
-    Пустые столбцы ([]) игнорируются.
+    Возвращает (bytes, actual_rendered_items).
+    Если текст не влез даже при минимальном шрифте — сообщает об этом.
     """
-    # Оставляем только непустые столбцы
     active_columns = [c for c in columns if c]
     num_cols = len(active_columns)
     if num_cols == 0:
@@ -79,7 +81,7 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
     scale = W / 1920
     margin = int(50 * scale)
     header_h = int(130 * scale)
-    gap_between_cols = int(40 * scale)
+    gap_between_cols = int(36 * scale)
 
     title_size = int(66 * scale)
     small_size = int(28 * scale)
@@ -99,31 +101,31 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
         font_title = ImageFont.load_default()
         font_small = ImageFont.load_default()
 
-    # ----- ПОДБОР РАЗМЕРА ШРИФТА -----
-    min_font = max(10, int(12 * scale))
-    max_font = int(44 * scale)
-
     col_width = (W - 2 * margin - (num_cols - 1) * gap_between_cols) // num_cols
 
-    best = None
-    for size in range(max_font, min_font - 1, -2):
+    # ----- ПОДБОР РАЗМЕРА ШРИФТА (до абс. минимума) -----
+    min_font = max(ABS_MIN_FONT, int(MIN_FONT_FLOOR * scale))
+    max_font = int(44 * scale)
+
+    chosen = None
+    for size in range(max_font, min_font - 1, -1):  # шаг 1 для точности
         try:
             font_body = ImageFont.truetype(FONT_PATH, size)
         except Exception:
             continue
 
         max_chars = int(col_width / (size * 0.42))
-        if max_chars < 8:
+        if max_chars < 6:
             continue
 
-        line_h = int(size * 1.32)
-        item_gap = int(size * 0.30)
+        line_h = int(size * 1.30)
+        item_gap = int(size * 0.28)
 
         heights = [calc_column_height(col, max_chars, line_h, item_gap) for col in active_columns]
         max_col_h = max(heights) if heights else 0
 
         if max_col_h <= available_h:
-            best = {
+            chosen = {
                 "font_body": font_body,
                 "size": size,
                 "max_chars": max_chars,
@@ -132,14 +134,17 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
             }
             break
 
-    if not best:
+    overflow = False
+    if not chosen:
+        # Даже минимум не влез — используем минимум и режем с предупреждением
+        overflow = True
         font_body = ImageFont.truetype(FONT_PATH, min_font)
-        best = {
+        chosen = {
             "font_body": font_body,
             "size": min_font,
             "max_chars": int(col_width / (min_font * 0.42)),
-            "line_h": int(min_font * 1.32),
-            "item_gap": int(min_font * 0.30),
+            "line_h": int(min_font * 1.30),
+            "item_gap": int(min_font * 0.28),
         }
 
     # ----- ШАПКА -----
@@ -157,26 +162,30 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
     draw.text((title_x, title_y), title_text, font=font_title, fill=BG_COLOR)
 
     # ----- КОЛОНКИ -----
+    rendered_count = 0
     for col_idx, col_items in enumerate(active_columns):
         col_x = margin + col_idx * (col_width + gap_between_cols)
         y = body_top
 
         for item in col_items:
-            lines = wrap_text(item, best["max_chars"])
+            lines = wrap_text(item, chosen["max_chars"])
+            # Проверяем, влезет ли весь пункт целиком
+            item_height = len(lines) * chosen["line_h"]
+            if y + item_height > body_bottom:
+                overflow = True
+                break  # дальше не рисуем в этой колонке
+
             for i, line in enumerate(lines):
                 prefix = "• " if i == 0 else "   "
                 draw.text(
                     (col_x, y),
                     prefix + line,
-                    font=best["font_body"],
+                    font=chosen["font_body"],
                     fill=TEXT_COLOR,
                 )
-                y += best["line_h"]
-                if y > body_bottom:
-                    break
-            y += best["item_gap"]
-            if y > body_bottom:
-                break
+                y += chosen["line_h"]
+            y += chosen["item_gap"]
+            rendered_count += 1
 
         if col_idx < num_cols - 1:
             line_x = col_x + col_width + gap_between_cols // 2
@@ -188,7 +197,9 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
 
     # ----- ПОДПИСЬ -----
     total_items = sum(len(c) for c in active_columns)
-    info = f"AMAZING HUD · {num_cols} столбц. · {total_items} п. · {best['size']}px"
+    info = f"AMAZING HUD · {num_cols} столбц. · {rendered_count}/{total_items} п. · {chosen['size']}px"
+    if overflow:
+        info += " ⚠️"
     draw.text(
         (margin, H - int(65 * scale)),
         info,
@@ -199,19 +210,18 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
     buf = BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
-    return buf.read()
+
+    return buf.read(), rendered_count, total_items, overflow
 
 
 # ========== БОТ ==========
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# user_id -> {"step": "...", "title": "...", "columns": [[], [], [], []], "active_col": 0}
 user_data = {}
 
 
 def columns_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура выбора столбца + действия."""
     kb = ReplyKeyboardBuilder()
     kb.button(text="1️⃣ Столбец 1")
     kb.button(text="2️⃣ Столбец 2")
@@ -247,12 +257,12 @@ async def cmd_start(message: types.Message):
         "👋 Привет! Я генерирую подсказки в стиле AMAZING HUD.\n\n"
         "📖 *Как использовать:*\n"
         "1. Отправь /make\n"
-        "2. Введи заголовок (одной строкой)\n"
-        "3. Выбери столбец кнопкой (1–4) — и вставь в него текст\n"
-        "4. Переключайся между столбцами и заполняй их\n"
+        "2. Введи заголовок\n"
+        "3. Выбери столбец кнопкой (1–4) — и вставь текст\n"
+        "4. Переключайся между столбцами, заполняй их\n"
         "5. Нажми «✅ Готово»\n"
-        "6. Выбери разрешение — получишь картинку\n\n"
-        "Можно использовать 1, 2, 3 или 4 столбца — пустые не отобразятся.",
+        "6. Выбери разрешение\n\n"
+        f"📊 Лимит: {MAX_CHARS_PER_COLUMN} символов на столбец, {MAX_TOTAL_CHARS} всего.",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -262,7 +272,7 @@ async def cmd_start(message: types.Message):
 async def cmd_make(message: types.Message):
     user_data[message.from_user.id] = make_state()
     await message.answer(
-        "📝 Введи *заголовок* подсказки (одной строкой):\n"
+        "📝 Введи *заголовок* (одной строкой):\n"
         "Например: `Основания для задержания`",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
@@ -281,10 +291,7 @@ async def on_cancel_btn(message: types.Message):
     await message.answer("❌ Отменено.", reply_markup=ReplyKeyboardRemove())
 
 
-@dp.message(lambda m: m.text and m.text.startswith("1️⃣ Столбец"))
-@dp.message(lambda m: m.text and m.text.startswith("2️⃣ Столбец"))
-@dp.message(lambda m: m.text and m.text.startswith("3️⃣ Столбец"))
-@dp.message(lambda m: m.text and m.text.startswith("4️⃣ Столбец"))
+@dp.message(lambda m: m.text and m.text[0] in "1234" and "Столбец" in m.text)
 async def on_select_column(message: types.Message):
     uid = message.from_user.id
     state = user_data.get(uid)
@@ -292,14 +299,18 @@ async def on_select_column(message: types.Message):
         await message.answer("Сначала отправь /make")
         return
 
-    # "1️⃣ Столбец 1" -> берём первую цифру
-    col_num = int(message.text.strip()[0]) - 1
-    state["active_col"] = col_num
+    try:
+        col_num = int(message.text.strip()[0]) - 1
+    except (ValueError, IndexError):
+        await message.answer("Не понял, какой столбец. Используй кнопки.")
+        return
 
+    state["active_col"] = col_num
     filled = len(state["columns"][col_num])
+    chars = sum(len(l) for l in state["columns"][col_num])
     await message.answer(
         f"✏️ Активен *Столбец {col_num + 1}*. Вставь текст.\n"
-        f"Сейчас в нём: {filled} строк.",
+        f"Сейчас: {filled} строк, {chars} символов.",
         parse_mode="Markdown",
     )
 
@@ -330,8 +341,11 @@ async def on_done_btn(message: types.Message):
 
     state["step"] = "awaiting_resolution"
     filled = [i + 1 for i, c in enumerate(state["columns"]) if c]
+    total = sum(len(c) for c in state["columns"])
+    chars = sum(sum(len(l) for l in c) for c in state["columns"] if c)
     await message.answer(
         f"✅ Заполнено столбцов: {len(filled)} ({', '.join(map(str, filled))}).\n"
+        f"Всего пунктов: {total}, символов: {chars}.\n"
         f"🎯 Выбери разрешение:",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -351,13 +365,20 @@ async def on_resolution(callback: types.CallbackQuery):
     await callback.message.answer("🎨 Генерирую картинку...")
 
     try:
-        img_bytes = render_card(state["title"], state["columns"], res_key)
-        photo = BufferedInputFile(img_bytes, filename="hud.png")
-        total = sum(len(c) for c in state["columns"])
-        await callback.message.answer_photo(
-            photo,
-            caption=f"✅ {state['title']} · {total} строк · {RESOLUTIONS[res_key]['label']}",
+        img_bytes, rendered, total, overflow = render_card(
+            state["title"], state["columns"], res_key
         )
+        photo = BufferedInputFile(img_bytes, filename="hud.png")
+
+        caption = f"✅ {state['title']} · {rendered}/{total} строк · {RESOLUTIONS[res_key]['label']}"
+        if overflow:
+            caption += (
+                f"\n⚠️ Не всё влезло на картинку ({total - rendered} строк обрезано). "
+                f"Уменьши текст, раздели на несколько подсказок "
+                f"или выбери разрешение побольше (4K)."
+            )
+
+        await callback.message.answer_photo(photo, caption=caption)
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка: {e}")
 
@@ -378,48 +399,60 @@ async def handle_text(message: types.Message):
     if not text:
         return
 
-    # Шаг 1: получение заголовка
     if state.get("step") == "awaiting_title":
-        state["title"] = text[:80]  # ограничим длину заголовка
+        state["title"] = text[:80]
         state["step"] = "awaiting_text"
         state["active_col"] = 0
         await message.answer(
             f"✅ Заголовок: *{state['title']}*\n\n"
-            f"Теперь выбери столбец кнопкой ниже и вставь в него текст.\n"
-            f"Активен *Столбец 1* по умолчанию.",
+            f"Теперь выбери столбец кнопкой ниже и вставь текст.\n"
+            f"Активен *Столбец 1*.",
             parse_mode="Markdown",
             reply_markup=columns_keyboard(),
         )
         return
 
-    # Шаг 2: получение текста в активный столбец
     if state.get("step") == "awaiting_text":
         col = state["active_col"]
         current_len = sum(len(line) for line in state["columns"][col])
+
         if current_len + len(text) > MAX_CHARS_PER_COLUMN:
             await message.answer(
-                f"⚠️ Столбец {col + 1} переполнен "
-                f"({current_len + len(text)} / {MAX_CHARS_PER_COLUMN}).\n"
-                f"Выбери другой столбец или нажми «✅ Готово»."
+                f"⚠️ Столбец {col + 1} переполнен.\n"
+                f"Сейчас: {current_len}, добавляешь: {len(text)}, "
+                f"лимит: {MAX_CHARS_PER_COLUMN}.\n\n"
+                f"Сократи текст, выбери другой столбец "
+                f"или нажми «✅ Готово»."
             )
             return
 
-        # Разбиваем по строкам, каждую строку — отдельный пункт
+        total_before = sum(sum(len(l) for l in c) for c in state["columns"])
+        if total_before + len(text) > MAX_TOTAL_CHARS:
+            await message.answer(
+                f"⚠️ Общий лимит {MAX_TOTAL_CHARS} символов превышен. "
+                f"Нажми «✅ Готово» и генерируй."
+            )
+            return
+
+        # Добавляем построчно
+        added = 0
         for line in text.split("\n"):
             line = line.strip()
             if line:
                 state["columns"][col].append(line)
+                added += 1
 
-        total = sum(len(c) for c in state["columns"])
+        total_lines = sum(len(c) for c in state["columns"])
+        total_chars = sum(sum(len(l) for l in c) for c in state["columns"])
         await message.answer(
-            f"➕ Добавлено в *Столбец {col + 1}*. "
-            f"Всего строк: {len(state['columns'][col])}.\n"
-            f"Всего во всех столбцах: {total}.",
+            f"➕ Добавлено *{added}* строк в Столбец {col + 1}.\n"
+            f"В столбце: {len(state['columns'][col])} строк, "
+            f"{sum(len(l) for l in state['columns'][col])} символов.\n"
+            f"Всего по всем: {total_lines} строк, {total_chars} символов.",
             parse_mode="Markdown",
         )
         return
 
-    # На этапе awaiting_resolution тексты не принимаем
     await message.answer("Нажми кнопку разрешения выше или начни заново /make.")
 
 
