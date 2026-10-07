@@ -19,6 +19,9 @@ if not BOT_TOKEN:
 # ========== НАСТРОЙКИ ==========
 FONT_PATH = "fonts/PT-Sans-Narrow-Bold.ttf"
 
+# ⚠️ ЗАМЕНИ на username своего бота
+BOT_USERNAME = "@amzhelp_bot"
+
 RESOLUTIONS = {
     "hd":   {"w": 1920, "h": 1080, "label": "🖥 1920×1080 (HD)"},
     "qhd":  {"w": 2560, "h": 1440, "label": "🖥 2560×1440 (QHD)"},
@@ -28,16 +31,12 @@ RESOLUTIONS = {
 
 BG_COLOR = (13, 13, 13)
 TEXT_COLOR = (255, 255, 255)
-MUTED_COLOR = (150, 150, 150)
 DIVIDER_COLOR = (55, 55, 55)
 
-# Реклама
-AD_BG_COLOR = (255, 122, 0)           # оранжевая плашка
-AD_TEXT_COLOR = (13, 13, 13)          # тёмный текст
-AD_ACCENT_COLOR = (255, 255, 255)     # белый для второй строки
-BOT_USERNAME = "@твой_бот_username"   # ← ЗАМЕНИ на username своего бота
+# Рекламная плашка
+AD_BG_COLOR = (255, 122, 0)
+AD_TEXT_COLOR = (13, 13, 13)
 
-MAX_COLUMNS = 4
 MAX_CHARS_PER_COLUMN = 15000
 MAX_TOTAL_CHARS = 40000
 
@@ -45,8 +44,8 @@ MIN_FONT_FLOOR = 8
 ABS_MIN_FONT = 6
 
 # Отступы
-EDGE_MARGIN = 10          # минимальный отступ от края
-BOTTOM_RESERVE = 90       # место под рекламную плашку
+EDGE_MARGIN = 10
+BOTTOM_RESERVE = 70   # резерв снизу под плашку
 
 
 # ========== ХЕЛПЕРЫ ==========
@@ -73,72 +72,53 @@ def calc_column_height(items: list[str], max_chars: int, line_h: int, item_gap: 
     return total
 
 
-def draw_ad_block(draw, W, H, source_text: str, scale: float):
-    """Рисует рекламную плашку в правом нижнем углу."""
-    # Размеры плашки — подбираем под содержимое
-    pad_x = int(18 * scale)
-    pad_y = int(12 * scale)
-
+def draw_ad_block(draw, W, H, scale: float):
+    """Маленькая плашка в правом нижнем углу: made with @username."""
     try:
-        font_line1 = ImageFont.truetype(FONT_PATH, int(20 * scale))
-        font_line2 = ImageFont.truetype(FONT_PATH, int(16 * scale))
+        font_ad = ImageFont.truetype(FONT_PATH, int(18 * scale))
     except Exception:
-        font_line1 = ImageFont.load_default()
-        font_line2 = ImageFont.load_default()
+        font_ad = ImageFont.load_default()
 
-    line1 = "AMAZING HUD BOT"
-    line2 = f"Источник: {source_text}" if source_text else "Подсказка создана в боте"
+    text = f"made with {BOT_USERNAME}"
+    pad_x = int(12 * scale)
+    pad_y = int(8 * scale)
 
-    # Считаем ширину
-    b1 = draw.textbbox((0, 0), line1, font=font_line1)
-    b2 = draw.textbbox((0, 0), line2, font=font_line2)
-    text_w = max(b1[2] - b1[0], b2[2] - b2[0])
+    bbox = draw.textbbox((0, 0), text, font=font_ad)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
 
     box_w = text_w + pad_x * 2
-    box_h = int(22 * scale) + int(18 * scale) + pad_y * 2
+    box_h = text_h + pad_y * 2
 
-    # Правый нижний угол
     box_x2 = W - EDGE_MARGIN
     box_x1 = box_x2 - box_w
     box_y2 = H - EDGE_MARGIN
     box_y1 = box_y2 - box_h
 
-    # Тень
-    shadow_offset = int(3 * scale)
+    # Лёгкая тень
+    shadow = int(2 * scale)
     draw.rounded_rectangle(
-        [(box_x1 + shadow_offset, box_y1 + shadow_offset),
-         (box_x2 + shadow_offset, box_y2 + shadow_offset)],
-        radius=int(8 * scale),
+        [(box_x1 + shadow, box_y1 + shadow), (box_x2 + shadow, box_y2 + shadow)],
+        radius=int(6 * scale),
         fill=(0, 0, 0),
     )
-
     # Оранжевая плашка
     draw.rounded_rectangle(
         [(box_x1, box_y1), (box_x2, box_y2)],
-        radius=int(8 * scale),
+        radius=int(6 * scale),
         fill=AD_BG_COLOR,
     )
-
-    # Текст: строка 1 — жирная (крупнее), строка 2 — мелкая
+    # Текст
     draw.text(
         (box_x1 + pad_x, box_y1 + pad_y - int(2 * scale)),
-        line1,
-        font=font_line1,
-        fill=AD_TEXT_COLOR,
-    )
-    draw.text(
-        (box_x1 + pad_x, box_y1 + pad_y + int(22 * scale)),
-        line2,
-        font=font_line2,
+        text,
+        font=font_ad,
         fill=AD_TEXT_COLOR,
     )
 
 
-def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"):
-    """
-    Рисует карточку без шапки и подписи.
-    Плашка с рекламой — в правом нижнем углу.
-    """
+def render_card(columns: list[list[str]], resolution_key: str = "hd"):
+    """Рисует карточку. Без шапки и подписи. Плашка — в правом нижнем углу."""
     active_columns = [c for c in columns if c]
     num_cols = len(active_columns)
     if num_cols == 0:
@@ -237,8 +217,8 @@ def render_card(title: str, columns: list[list[str]], resolution_key: str = "hd"
                 width=max(1, int(2 * scale)),
             )
 
-    # ----- РЕКЛАМНАЯ ПЛАШКА -----
-    draw_ad_block(draw, W, H, source_text=title, scale=scale)
+    # ----- ПЛАШКА -----
+    draw_ad_block(draw, W, H, scale)
 
     buf = BytesIO()
     img.save(buf, format="PNG", optimize=True)
@@ -275,10 +255,9 @@ def resolutions_keyboard() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def make_state(title: str = "ПОДСКАЗКА"):
+def make_state():
     return {
-        "step": "awaiting_title",
-        "title": title,
+        "step": "awaiting_text",
         "columns": [[], [], [], []],
         "active_col": 0,
     }
@@ -290,13 +269,10 @@ async def cmd_start(message: types.Message):
         "👋 Привет! Я генерирую подсказки в стиле AMAZING HUD.\n\n"
         "📖 *Как использовать:*\n"
         "1. Отправь /make\n"
-        "2. Введи *источник* — например «УК РФ» или «КоАП»\n"
-        "   (он попадёт в плашку в углу картинки)\n"
-        "3. Выбери столбец кнопкой (1–4) и вставь текст\n"
-        "4. Переключайся между столбцами, заполняй их\n"
-        "5. Нажми «✅ Готово»\n"
-        "6. Выбери разрешение\n\n"
-        f"📊 Лимит: {MAX_CHARS_PER_COLUMN} символов на столбец.",
+        "2. Выбери столбец (1–4) и вставь текст\n"
+        "3. Переключайся между столбцами, заполняй их\n"
+        "4. Нажми «✅ Готово»\n"
+        "5. Выбери разрешение",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
@@ -306,11 +282,10 @@ async def cmd_start(message: types.Message):
 async def cmd_make(message: types.Message):
     user_data[message.from_user.id] = make_state()
     await message.answer(
-        "📝 Введи *источник* подсказки (одной строкой):\n"
-        "Например: `УК РФ`, `КоАП`, `ФЗ о полиции`\n\n"
-        "Он будет отображён в правом нижнем углу картинки.",
+        "📝 Выбери столбец кнопкой ниже и вставь текст.\n"
+        "Активен *Столбец 1* по умолчанию.",
         parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=columns_keyboard(),
     )
 
 
@@ -400,17 +375,12 @@ async def on_resolution(callback: types.CallbackQuery):
     await callback.message.answer("🎨 Генерирую картинку...")
 
     try:
-        img_bytes, rendered, total, overflow = render_card(
-            state["title"], state["columns"], res_key
-        )
+        img_bytes, rendered, total, overflow = render_card(state["columns"], res_key)
         photo = BufferedInputFile(img_bytes, filename="hud.png")
 
-        caption = f"✅ Источник: {state['title']} · {rendered}/{total} строк · {RESOLUTIONS[res_key]['label']}"
+        caption = f"✅ {rendered}/{total} строк · {RESOLUTIONS[res_key]['label']}"
         if overflow:
-            caption += (
-                f"\n⚠️ Не всё влезло ({total - rendered} строк обрезано). "
-                f"Выбери разрешение побольше (4K)."
-            )
+            caption += f"\n⚠️ {total - rendered} строк не влезло — выбери 4K."
 
         await callback.message.answer_photo(photo, caption=caption)
     except Exception as e:
@@ -431,19 +401,6 @@ async def handle_text(message: types.Message):
 
     text = (message.text or "").strip()
     if not text:
-        return
-
-    if state.get("step") == "awaiting_title":
-        state["title"] = text[:60]
-        state["step"] = "awaiting_text"
-        state["active_col"] = 0
-        await message.answer(
-            f"✅ Источник: *{state['title']}*\n\n"
-            f"Теперь выбери столбец кнопкой ниже и вставь текст.\n"
-            f"Активен *Столбец 1*.",
-            parse_mode="Markdown",
-            reply_markup=columns_keyboard(),
-        )
         return
 
     if state.get("step") == "awaiting_text":
@@ -474,7 +431,7 @@ async def handle_text(message: types.Message):
         total_chars = sum(sum(len(l) for l in c) for c in state["columns"])
         await message.answer(
             f"➕ Добавлено *{added}* строк в Столбец {col + 1}.\n"
-            f"Всего по всем: {total_lines} строк, {total_chars} символов.",
+            f"Всего: {total_lines} строк, {total_chars} символов.",
             parse_mode="Markdown",
         )
         return
