@@ -5,7 +5,6 @@ from typing import Optional
 DB_PATH = "builds.db"
 
 
-# ========== ИНИЦИАЛИЗАЦИЯ ВСЕХ ТАБЛИЦ ==========
 def init_db():
     """Создаёт все таблицы, если их нет."""
     conn = sqlite3.connect(DB_PATH)
@@ -29,7 +28,7 @@ def init_db():
         )
     """)
 
-    # --- Оценки сборок ---
+    # --- Оценки ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ratings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,7 +54,7 @@ def init_db():
         )
     """)
 
-    # --- Компоненты для конструктора ---
+    # --- Компоненты ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS components (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +71,12 @@ def init_db():
     """)
 
     conn.commit()
+
+    # --- Отладка: какие таблицы реально есть ---
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = [row[0] for row in cursor.fetchall()]
+    print(f"✅ init_db: таблицы в БД: {tables}")
+
     conn.close()
 
 
@@ -96,7 +101,6 @@ def get_builds(category: Optional[str] = None, limit: int = 10, offset: int = 0)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-
     if category:
         cursor.execute("""
             SELECT * FROM builds WHERE category = ?
@@ -109,7 +113,6 @@ def get_builds(category: Optional[str] = None, limit: int = 10, offset: int = 0)
             ORDER BY rating DESC, votes DESC, created_at DESC
             LIMIT ? OFFSET ?
         """, (limit, offset))
-
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -128,20 +131,17 @@ def get_build(build_id: int):
 def rate_build(build_id: int, user_id: int, score: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
     cursor.execute("""
         INSERT INTO ratings (build_id, user_id, score, created_at)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(build_id, user_id) DO UPDATE SET score = excluded.score
     """, (build_id, user_id, score, datetime.now().isoformat()))
-
     cursor.execute("""
         UPDATE builds
         SET rating = (SELECT AVG(score) FROM ratings WHERE build_id = ?),
             votes  = (SELECT COUNT(*) FROM ratings WHERE build_id = ?)
         WHERE id = ?
     """, (build_id, build_id, build_id))
-
     conn.commit()
     conn.close()
 
@@ -180,7 +180,6 @@ def add_author(name: str, telegram: str = "", description: str = "", verified: i
             verified = excluded.verified
     """, (name, telegram, description, verified, datetime.now().isoformat()))
     conn.commit()
-
     cursor.execute("SELECT id FROM authors WHERE name = ?", (name,))
     author_id = cursor.fetchone()[0]
     conn.close()
@@ -192,16 +191,6 @@ def get_author(author_id: int):
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM authors WHERE id = ?", (author_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def get_author_by_name(name: str):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM authors WHERE name = ?", (name,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -222,10 +211,8 @@ def get_all_authors(limit: int = 20, offset: int = 0):
 
 
 def update_author_stats(author_name: str):
-    """Пересчитывает количество сборок и средний рейтинг автора."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
     cursor.execute("""
         UPDATE authors
         SET builds_count = (
@@ -237,12 +224,11 @@ def update_author_stats(author_name: str):
             ), 0)
         WHERE name = ?
     """, (author_name, author_name, author_name))
-
     conn.commit()
     conn.close()
 
 
-# ========== КОМПОНЕНТЫ (ДЛЯ КОНСТРУКТОРА) ==========
+# ========== КОМПОНЕНТЫ ==========
 COMPONENT_CATEGORIES = {
     "fps_boost": "🚀 FPS-буст",
     "textures": "🖼 Сжатые текстуры",
@@ -271,7 +257,6 @@ def add_component(name: str, category: str, description: str = "",
             author = excluded.author
     """, (name, category, description, link, sha256, size_kb, author, datetime.now().isoformat()))
     conn.commit()
-
     cursor.execute("SELECT id FROM components WHERE name = ? AND category = ?", (name, category))
     comp_id = cursor.fetchone()[0]
     conn.close()
@@ -282,7 +267,6 @@ def get_components(category: Optional[str] = None, limit: int = 50):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-
     if category:
         cursor.execute("""
             SELECT * FROM components WHERE category = ?
@@ -292,7 +276,6 @@ def get_components(category: Optional[str] = None, limit: int = 50):
         cursor.execute("""
             SELECT * FROM components ORDER BY category, name LIMIT ?
         """, (limit,))
-
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
